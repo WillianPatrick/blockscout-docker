@@ -1,0 +1,1 @@
+FROM ghcr.io/blockscout/smart-contract-verifier:latest

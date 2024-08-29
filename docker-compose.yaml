@@ -1,0 +1,200 @@
+version: '3.9'
+name: blockscout
+services:
+  redis-db:
+    container_name: blockscout-redis-db
+    image: redis:latest
+    restart: always  
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'    
+    build:
+      context: ./redis
+      dockerfile: Dockerfile
+
+  db:
+    container_name: blockscout-db
+    image: postgres:latest
+    shm_size: 256m
+    restart: always    
+    ports:
+      - target: 5432
+        published: 7432  
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'    
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    env_file:
+      -  ./db/.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blockscout -d blockscout"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    container_name: blockscout-backend
+    image: blockscout-backend:latest
+    depends_on:
+      db:
+        condition: service_healthy        
+      redis-db:
+        condition: service_started
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    pull_policy: always
+    restart: always
+    stop_grace_period: 5m
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - target: 4000
+        published: 4000      
+    env_file:
+      -  ./backend/.env
+    links:
+      - db:database
+
+  visualizer:
+    container_name: blockscout-visualizer
+    image: blockscout-visualizer:latest
+    pull_policy: always
+    platform: linux/amd64
+    restart: always
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'    
+    build:
+      context: ./visualizer
+      dockerfile: Dockerfile
+    env_file:
+      -  ./visualizer/.env      
+
+  sig-provider:
+    container_name: blockscout-sig-provider
+    image: blockscout-sig-provider:latest
+    pull_policy: always
+    platform: linux/amd64
+    restart: always
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'    
+    build:
+      context: ./sig-provider
+      dockerfile: Dockerfile
+
+  frontend:
+    container_name: blockscout-frontend
+    image: blockscout-frontend:latest
+    restart: always      
+    depends_on:
+      - backend
+    ports:
+      - target: 3000
+        published: 3000  
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'  
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    env_file:
+      -  ./frontend/.env
+
+  stats-db:
+    container_name: blockscout-stats-db
+    restart: always      
+    image: postgres:latest
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'      
+    ports:
+      - target: 5432
+        published: 7433    
+    build:
+      context: ./stats-db
+      dockerfile: Dockerfile
+    env_file:
+      -  ./stats-db/.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stats -d stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  stats:
+    container_name: blockscout-stats
+    image: blockscout-stats:latest
+    pull_policy: always
+    platform: linux/amd64
+    restart: always
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'    
+    depends_on:
+      stats-db:
+        condition: service_healthy
+      user-ops-indexer:
+        condition: service_started    
+    build:
+      context: ./stats
+      dockerfile: Dockerfile
+    env_file:
+      -  ./stats/.env
+
+  user-ops-indexer:
+    container_name: blockscout-user-ops-indexer
+    restart: always      
+    image: blockscout-user-ops-indexer:latest
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'      
+    depends_on:
+      db:
+        condition: service_healthy        
+      backend:
+        condition: service_started
+    build:
+      context: ./user-ops-indexer
+      dockerfile: Dockerfile
+    env_file:
+      -  ./user-ops-indexer/.env      
+
+  proxy:
+    container_name: blockscout-proxy
+    restart: always      
+    image: nginx:latest
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - target: 80
+        published: 80
+      - target: 8080
+        published: 8080
+      - target: 8081
+        published: 8081      
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'        
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    env_file:
+      -  ./proxy/.env    
+    environment:
+      BACK_PROXY_PASS: ${BACK_PROXY_PASS:-http://backend:4000}
+      FRONT_PROXY_PASS: ${FRONT_PROXY_PASS:-http://frontend:3000}
+
+  sc-verifier:
+    container_name: 'smart-contract-verifier'
+    image: 'blockscout-smart-contract-verifier:latest'
+    pull_policy: always
+    platform: linux/amd64
+    restart: always
+    depends_on:
+      - backend
+      - frontend  
+    build:
+      context: ./smart-contract-verifier
+      dockerfile: Dockerfile
+    env_file:
+      -  ./smart-contract-verifier/.env        
+    ports:
+      - 8082:8050      
